@@ -6,33 +6,61 @@
 #include "../includes/color.hpp"
 #include "../includes/camera.hpp"
 #include "../includes/material.hpp"
+#include <thread>
+#include <array>
 
 color ray_color(const ray& r, const hittable& world, int depth);
 hittable_list random_scene();
+void assign_to_thread(int end_y, int start_y, std::vector<color> &buffer);
+
+// Image
+const auto aspect_ratio = 3.0 / 2.0;
+const int image_width = 1200;
+const int image_height = static_cast<int>(image_width / aspect_ratio);
+const int samples_per_pixel = 10;
+const int max_depth = 50;
+
+// World
+auto world = random_scene();
+
+// Camera
+point3 lookfrom(13,2,3);
+point3 lookat(0,0,0);
+vec3 vup(0,1,0);
+auto dist_to_focus = 10.0;
+auto aperture = 0.1;
+camera cam(lookfrom, lookat, vup, 20, aspect_ratio, aperture, dist_to_focus);
 
 int main() {
-  // Image
-  const auto aspect_ratio = 3.0 / 2.0;
-  const int image_width = 400;
-  const int image_height = static_cast<int>(image_width / aspect_ratio);
-  const int samples_per_pixel = 100;
-  const int max_depth = 50;
-
-  // World
-  auto world = random_scene();
-
-  // Camera
-  point3 lookfrom(13,2,3);
-  point3 lookat(0,0,0);
-  vec3 vup(0,1,0);
-  auto dist_to_focus = 10.0;
-  auto aperture = 0.1;
-
-  camera cam(lookfrom, lookat, vup, 20, aspect_ratio, aperture, dist_to_focus);
-
-  // Render
   std::cout << "P3\n" << image_width << ' ' << image_height << "\n255\n";
-  for (int j = image_height - 1; j >= 0; --j) {
+
+  const int Nthread = 8;
+  const int one_Nth = static_cast<int>(image_height / Nthread);
+  std::vector<std::thread> threads;
+  std::array<std::vector<color>, Nthread> threadBuffers;
+  for(int i = 0; i < Nthread; i++) {
+    threadBuffers[i] = std::vector<color>();
+    if(i == 0) {
+      threads.push_back(std::thread(assign_to_thread, one_Nth, 0, std::ref(threadBuffers[i])));
+    } else if(i == Nthread - 1) {
+      threads.push_back(std::thread(assign_to_thread, image_height, (i) * one_Nth + 1, std::ref(threadBuffers[i])));
+    } else {
+      threads.push_back(std::thread(assign_to_thread, one_Nth * (i + 1), (one_Nth * i) + 1, std::ref(threadBuffers[i])));
+    }
+  }
+
+  for(int i = 0; i < threads.size(); i++) {
+    threads[i].join();
+  }
+  for(int i = threadBuffers.size() - 1; i >= 0; i--) {
+    write_buffer(std::cout, threadBuffers[i]);
+  }
+
+  std::cerr << "\nDone.\n";
+}
+
+void assign_to_thread(int start_y, int end_y, std::vector<color> &buffer) {
+  for (int j = start_y; j >= end_y; --j) {
     std::cerr << "\rScanlines remaining: " << j << ' ' << std::flush;
     for (int i = 0; i < image_width; ++i) {
       color pixel_color(0, 0, 0);
@@ -42,10 +70,9 @@ int main() {
         ray r = cam.get_ray(u, v);
         pixel_color += ray_color(r, world, max_depth);
       }
-      write_color(std::cout, pixel_color, samples_per_pixel);
+      write_color_in_buffer(buffer, pixel_color, samples_per_pixel);
     }
   }
-  std::cerr << "\nDone.\n";
 }
 
 color ray_color(const ray& r, const hittable& world, int depth) {
